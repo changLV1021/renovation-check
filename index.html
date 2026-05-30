@@ -155,6 +155,47 @@
       font-size: 16px;
     }
 
+    /* Swipe to delete */
+    .swipe-wrap {
+      position: relative;
+      overflow: hidden;
+      border-radius: 12px;
+      margin-bottom: 8px;
+    }
+    .swipe-wrap .item-card {
+      position: relative;
+      z-index: 2;
+      background: var(--card);
+      border-radius: 12px;
+      margin-bottom: 0;
+      transition: transform 0.25s ease;
+      will-change: transform;
+      touch-action: pan-y;
+    }
+    .swipe-wrap .item-card.swipe-no-transition {
+      transition: none;
+    }
+
+    .swipe-delete {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 80px;
+      height: 100%;
+      background: var(--danger);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 500;
+      border-radius: 0 12px 12px 0;
+      z-index: 1;
+      cursor: pointer;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
     .item-card {
       display: flex;
       flex-direction: row;
@@ -607,6 +648,17 @@
           req.onerror = () => reject(req.error);
         });
       },
+
+      async remove(id) {
+        const database = await openDB();
+        return new Promise((resolve, reject) => {
+          const tx = database.transaction(STORE, 'readwrite');
+          const store = tx.objectStore(STORE);
+          const req = store.delete(id);
+          req.onsuccess = () => resolve();
+          req.onerror = () => reject(req.error);
+        });
+      },
     };
 
     window.__db = db;
@@ -682,13 +734,16 @@
         return;
       }
       container.innerHTML = items.map(item => `
-        <div class="item-card" data-id="${item.id}">
-          <img class="item-thumb" src="${URL.createObjectURL(item.photo)}" alt="问题照片">
-          <div class="item-info">
-            <div class="item-desc">${escapeHtml(item.description || '无描述')}</div>
-            <div class="item-meta">${item.trade || ''}${item.trade && item.severity ? ' · ' : ''}${item.severity || ''}</div>
+        <div class="swipe-wrap">
+          <div class="item-card" data-id="${item.id}">
+            <img class="item-thumb" src="${URL.createObjectURL(item.photo)}" alt="问题照片">
+            <div class="item-info">
+              <div class="item-desc">${escapeHtml(item.description || '无描述')}</div>
+              <div class="item-meta">${item.trade || ''}${item.trade && item.severity ? ' · ' : ''}${item.severity || ''}</div>
+            </div>
+            <span class="status-badge ${item.status}">${item.status === 'passed' ? '已通过' : '待验收'}</span>
           </div>
-          <span class="status-badge ${item.status}">${item.status === 'passed' ? '已通过' : '待验收'}</span>
+          <div class="swipe-delete" data-id="${item.id}">删除</div>
         </div>
       `).join('');
     }
@@ -902,20 +957,24 @@
             alert('文件格式无效或为空');
             return;
           }
-          let count = 0;
+          let addCount = 0, updateCount = 0;
           _batchSync = true;
           for (const item of items) {
             if (!item.photo || !item.id) continue;
             item.photo = base64ToBlob(item.photo);
             const existing = await db.get(item.id);
-            if (!existing) {
+            if (existing) {
+              await db.update(item);
+              updateCount++;
+            } else {
               await db.add(item);
-              count++;
+              addCount++;
             }
           }
           _batchSync = false;
           syncToFile().catch(() => {});
-          alert(`导入完成！共导入 ${count} 条记录${items.length - count > 0 ? `，${items.length - count} 条已存在跳过` : ''}`);
+          const msg = `导入完成！新增 ${addCount} 条，更新 ${updateCount} 条`;
+          alert(msg);
           refreshList();
         } catch (err) {
           alert('导入失败：文件格式不正确');
@@ -1043,6 +1102,104 @@
       if (!_batchSync) syncToFile().catch(() => {});
       return result;
     };
+    const _origRemove = db.remove.bind(db);
+    db.remove = async function(id) {
+      const result = await _origRemove(id);
+      if (!_batchSync) syncToFile().catch(() => {});
+      return result;
+    };
+
+    // --- Swipe to delete ---
+
+    let swipeState = null;
+
+    // Close any open swipe card
+    function resetSwipe() {
+      document.querySelectorAll('.item-card.swipe-open').forEach(c => {
+        c.style.transition = 'transform 0.25s ease';
+        c.style.transform = 'translateX(0)';
+        c.classList.remove('swipe-open');
+      });
+    }
+
+    document.getElementById('item-list').addEventListener('touchstart', (e) => {
+      const card = e.target.closest('.item-card');
+      if (!card) return;
+      // Close any other open card
+      document.querySelectorAll('.item-card.swipe-open').forEach(c => {
+        if (c !== card) {
+          c.style.transition = 'transform 0.25s ease';
+          c.style.transform = 'translateX(0)';
+          c.classList.remove('swipe-open');
+        }
+      });
+      const touch = e.touches[0];
+      swipeState = { card, startX: touch.clientX, startY: touch.clientY, swiping: false };
+    }, { passive: true });
+
+    document.getElementById('item-list').addEventListener('touchmove', (e) => {
+      if (!swipeState) return;
+      const touch = e.touches[0];
+      const deltaX = touch.clientX - swipeState.startX;
+      const deltaY = touch.clientY - swipeState.startY;
+
+      if (!swipeState.swiping && Math.abs(deltaX) < 10 && Math.abs(deltaY) < 10) return;
+      if (!swipeState.swiping && Math.abs(deltaY) > Math.abs(deltaX)) {
+        swipeState = null;
+        return;
+      }
+
+      e.preventDefault();
+      swipeState.swiping = true;
+
+      const translate = Math.max(-80, Math.min(0, deltaX));
+      swipeState.card.style.transition = 'none';
+      swipeState.card.style.transform = `translateX(${translate}px)`;
+    }, { passive: false });
+
+    document.getElementById('item-list').addEventListener('touchend', (e) => {
+      if (!swipeState) return;
+      const card = swipeState.card;
+      const deltaX = e.changedTouches[0].clientX - swipeState.startX;
+
+      card.style.transition = 'transform 0.25s ease';
+
+      if (deltaX < -40) {
+        card.style.transform = 'translateX(-80px)';
+        card.classList.add('swipe-open');
+      } else {
+        card.style.transform = 'translateX(0)';
+        card.classList.remove('swipe-open');
+      }
+
+      swipeState = null;
+    }, { passive: true });
+
+    // Delete button handler
+    document.getElementById('item-list').addEventListener('click', (e) => {
+      const deleteBtn = e.target.closest('.swipe-delete');
+      if (deleteBtn) {
+        const id = deleteBtn.dataset.id;
+        if (confirm('确定删除这条记录？')) {
+          db.remove(id).then(() => {
+            resetSwipe();
+            refreshList();
+          }).catch((err) => {
+            alert('删除失败，请重试');
+            console.error('Delete error:', err);
+          });
+        } else {
+          // Cancel: close swipe
+          const card = deleteBtn.parentElement.querySelector('.item-card');
+          if (card) {
+            card.style.transition = 'transform 0.25s ease';
+            card.style.transform = 'translateX(0)';
+            card.classList.remove('swipe-open');
+          }
+        }
+        return;
+      }
+    });
 
     // --- Navigation and app bootstrap ---
 
@@ -1068,8 +1225,16 @@
     });
 
     document.getElementById('item-list').addEventListener('click', async (e) => {
+      if (e.target.closest('.swipe-delete')) return; // handled by delete handler
       const card = e.target.closest('.item-card');
       if (!card) return;
+      // Reset swipe if card is open
+      if (card.classList.contains('swipe-open')) {
+        card.style.transition = 'transform 0.25s ease';
+        card.style.transform = 'translateX(0)';
+        card.classList.remove('swipe-open');
+        return;
+      }
       try {
         const item = await db.get(card.dataset.id);
         if (item) {
