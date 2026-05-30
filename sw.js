@@ -1,11 +1,11 @@
-const CACHE_NAME = 'renov8-v1';
+const CACHE_NAME = 'renov8-v2';
 const PRECACHE_URLS = [
-  'index.html',
   'manifest.json',
   'renov8-icon.svg'
 ];
+// index.html is NOT precached — uses network-first to always get latest
 
-// Install: precache core assets
+// Install: precache static assets
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
@@ -28,23 +28,43 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch: cache-first strategy
+// Fetch: network-first for navigation (index.html), cache-first for assets
 self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
-      return fetch(event.request).then((networkResponse) => {
-        if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
-          return networkResponse;
+  const isNavigation = event.request.mode === 'navigate';
+
+  if (isNavigation) {
+    // Network-first for HTML: always try to get latest, fall back to cache
+    event.respondWith(
+      fetch(event.request).then((response) => {
+        if (response && response.status === 200) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, clone);
+          });
         }
-        const responseToCache = networkResponse.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseToCache);
+        return response;
+      }).catch(() => {
+        return caches.match(event.request);
+      })
+    );
+  } else {
+    // Cache-first for static assets
+    event.respondWith(
+      caches.match(event.request).then((cachedResponse) => {
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+        return fetch(event.request).then((networkResponse) => {
+          if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
+            return networkResponse;
+          }
+          const responseToCache = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseToCache);
+          });
+          return networkResponse;
         });
-        return networkResponse;
-      });
-    })
-  );
+      })
+    );
+  }
 });
