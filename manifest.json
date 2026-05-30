@@ -1,0 +1,16 @@
+{
+  "name": "装修验收记录",
+  "short_name": "验收清单",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8f9fa",
+  "theme_color": "#2c3e50",
+  "icons": [
+    {
+      "src": "renov8-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
