@@ -63,7 +63,51 @@
     #list-header h1 {
       font-size: 22px;
       font-weight: 700;
+      margin-bottom: 0;
+    }
+
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
       margin-bottom: 12px;
+    }
+
+    .btn-settings {
+      background: none;
+      border: none;
+      font-size: 20px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 8px;
+      transition: background 0.2s;
+    }
+    .btn-settings:active {
+      background: rgba(0,0,0,0.05);
+    }
+
+    #data-panel {
+      margin-bottom: 12px;
+      display: flex;
+      gap: 8px;
+    }
+    #data-panel.hidden { display: none; }
+
+    .data-btn {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      background: var(--card);
+      color: var(--text);
+      font-size: 13px;
+      cursor: pointer;
+      text-align: center;
+      transition: background 0.2s;
+    }
+    .data-btn:active {
+      background: #eee;
     }
 
     #filter-bar {
@@ -377,7 +421,14 @@
   <!-- View 1: List view -->
   <section id="view-list" class="view active">
     <header id="list-header">
-      <h1>装修验收清单</h1>
+      <div class="header-row">
+        <h1>装修验收清单</h1>
+        <button id="btn-settings" class="btn-settings">&#x2699;</button>
+      </div>
+      <div id="data-panel" class="hidden">
+        <button id="btn-export" class="data-btn">导出数据</button>
+        <button id="btn-import" class="data-btn">导入数据</button>
+      </div>
       <div id="filter-bar">
         <button class="filter-btn active" data-filter="all">全部</button>
         <button class="filter-btn" data-filter="pending">待验收</button>
@@ -733,6 +784,105 @@
         });
       }
     }
+
+    // --- Export / Import ---
+
+    function blobToBase64(blob) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    function base64ToBlob(dataUrl) {
+      const parts = dataUrl.split(',');
+      const mime = parts[0].match(/:(.*?);/)[1];
+      const bytes = atob(parts[1]);
+      const arr = new Uint8Array(bytes.length);
+      for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+      return new Blob([arr], { type: mime });
+    }
+
+    async function exportData() {
+      try {
+        const items = await db.getAll();
+        if (items.length === 0) {
+          alert('没有数据可导出');
+          return;
+        }
+        const exported = [];
+        for (const item of items) {
+          exported.push({
+            id: item.id,
+            photo: await blobToBase64(item.photo),
+            description: item.description,
+            location: item.location,
+            severity: item.severity,
+            trade: item.trade,
+            date: item.date,
+            status: item.status,
+            passedAt: item.passedAt,
+          });
+        }
+        const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `验收数据_${formatDate(new Date().toISOString())}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        alert('导出失败：' + err.message);
+        console.error('Export error:', err);
+      }
+    }
+
+    async function importData() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json';
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const items = JSON.parse(text);
+          if (!Array.isArray(items) || items.length === 0) {
+            alert('文件格式无效或为空');
+            return;
+          }
+          let count = 0;
+          for (const item of items) {
+            if (!item.photo || !item.id) continue;
+            item.photo = base64ToBlob(item.photo);
+            // Check if exists
+            const existing = await db.get(item.id);
+            if (!existing) {
+              await db.add(item);
+              count++;
+            }
+          }
+          alert(`导入完成！共导入 ${count} 条记录${items.length - count > 0 ? `，${items.length - count} 条已存在跳过` : ''}`);
+          refreshList();
+        } catch (err) {
+          alert('导入失败：文件格式不正确');
+          console.error('Import error:', err);
+        }
+      };
+      input.click();
+    }
+
+    // Toggle settings panel
+    document.getElementById('btn-settings').addEventListener('click', () => {
+      const panel = document.getElementById('data-panel');
+      panel.classList.toggle('hidden');
+    });
+
+    document.getElementById('btn-export').addEventListener('click', exportData);
+    document.getElementById('btn-import').addEventListener('click', importData);
 
     // --- Navigation and app bootstrap ---
 
