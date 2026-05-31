@@ -1293,42 +1293,249 @@
       }
     }
 
+    // --- XLSX Generator (pure JS, no dependencies) ---
+
+    // CRC-32 table (for ZIP)
+    const _crcTbl = new Int32Array(256);
+    for (let _n = 0; _n < 256; _n++) {
+      let _c = _n;
+      for (let _k = 0; _k < 8; _k++) _c = _c & 1 ? 0xEDB88320 ^ (_c >>> 1) : _c >>> 1;
+      _crcTbl[_n] = _c;
+    }
+    function _crc32(data) {
+      let crc = -1;
+      for (let i = 0; i < data.length; i++) crc = _crcTbl[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);
+      return (crc ^ -1) >>> 0;
+    }
+
+    function _u16(v) { return [v & 0xFF, (v >> 8) & 0xFF]; }
+    function _u32(v) { return [v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF]; }
+
+    function _makeZip(files) {
+      // files: [{name: string, data: Uint8Array, method?: number}]
+      // method: 0=STORED(default), 8=DEFLATED
+      const entries = [];
+      let offset = 0, cd = [];
+      for (const f of files) {
+        const nameB = new TextEncoder().encode(f.name);
+        const crc = _crc32(f.data);
+        const method = f.method || 0;
+        const h = new Uint8Array(30 + nameB.length);
+        h.set(_u32(0x04034b50), 0); // signature
+        h.set(_u16(20), 4); // version needed
+        h.set(_u16(0), 6); // flags
+        h.set(_u16(method), 8); // compression method
+        h.set(_u16(0), 10); // mtime
+        h.set(_u16(0), 12); // mdate
+        h.set(_u32(crc), 14);
+        h.set(_u32(f.data.length), 18); // compressed size
+        h.set(_u32(f.data.length), 22); // uncompressed size
+        h.set(_u16(nameB.length), 26);
+        h.set(_u16(0), 28);
+        h.set(nameB, 30);
+        entries.push(h, f.data);
+        cd.push({ nameB, crc, len: f.data.length, offset, method });
+        offset += h.length + f.data.length;
+      }
+      const cdParts = [];
+      let cdOffset = offset;
+      for (const e of cd) {
+        const ce = new Uint8Array(46 + e.nameB.length);
+        ce.set(_u32(0x02014b50), 0);
+        ce.set(_u16(20), 4);
+        ce.set(_u16(20), 6);
+        ce.set(_u16(e.method), 8);
+        ce.set(_u16(0), 10);
+        ce.set(_u16(0), 12);
+        ce.set(_u16(0), 14);
+        ce.set(_u32(e.crc), 16);
+        ce.set(_u32(e.len), 20);
+        ce.set(_u32(e.len), 24);
+        ce.set(_u16(e.nameB.length), 28);
+        ce.set(_u16(0), 30);
+        ce.set(_u16(0), 32);
+        ce.set(_u16(0), 34);
+        ce.set(_u16(0), 36);
+        ce.set(_u32(0), 38);
+        ce.set(_u32(e.offset), 42);
+        ce.set(e.nameB, 46);
+        cdParts.push(ce);
+        cdOffset += ce.length;
+      }
+      const eocd = new Uint8Array(22);
+      eocd.set(_u32(0x06054b50), 0);
+      eocd.set(_u16(0), 4);
+      eocd.set(_u16(0), 6);
+      eocd.set(_u16(cd.length), 8);
+      eocd.set(_u16(cd.length), 10);
+      eocd.set(_u32(cdParts.reduce((a, c) => a + c.length, 0)), 12);
+      eocd.set(_u32(cdOffset), 16);
+      eocd.set(_u16(0), 20);
+
+      const all = [].concat(entries, cdParts, [eocd]);
+      const total = all.reduce((a, c) => a + c.length, 0);
+      const result = new Uint8Array(total);
+      let pos = 0;
+      for (const p of all) { result.set(p, pos); pos += p.length; }
+      return result;
+    }
+
+    function _xmlEnc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
     async function exportExcel() {
       try {
         const items = await db.getAll();
         if (items.length === 0) { alert('没有数据可导出'); return; }
         let filtered = items;
-        if (currentProject) {
-          filtered = filtered.filter(i => i.project === currentProject);
+        if (currentProject) filtered = filtered.filter(i => i.project === currentProject);
+
+        // Prepare media (images)
+        const media = [];
+        for (let i = 0; i < filtered.length; i++) {
+          const b64 = await blobToBase64(filtered[i].photo);
+          const raw = atob(b64.split(',')[1]);
+          const bytes = new Uint8Array(raw.length);
+          for (let j = 0; j < raw.length; j++) bytes[j] = raw.charCodeAt(j);
+          media.push({ id: i + 1, data: bytes });
         }
-        let rows = '';
-        for (const item of filtered) {
-          const b64 = await blobToBase64(item.photo);
-          rows += `<tr>
-            <td>${escapeHtml(item.project || '')}</td>
-            <td>${escapeHtml(item.location || '')}</td>
-            <td>${escapeHtml(item.trade || '')}</td>
-            <td>${escapeHtml(item.description || '')}</td>
-            <td>${escapeHtml(item.severity || '')}</td>
-            <td>${formatDate(item.date)}</td>
-            <td><img src="${b64}" width="120"></td>
-          </tr>`;
+
+        // Build sheet rows
+        let sheetRows = '';
+        for (let i = 0; i < filtered.length; i++) {
+          const r = i + 2;
+          const d = filtered[i];
+          sheetRows += `<row r="${r}">
+            <c r="A${r}" t="inlineStr"><is><t>${_xmlEnc(d.project || '')}</t></is></c>
+            <c r="B${r}" t="inlineStr"><is><t>${_xmlEnc(d.location || '')}</t></is></c>
+            <c r="C${r}" t="inlineStr"><is><t>${_xmlEnc(d.trade || '')}</t></is></c>
+            <c r="D${r}" t="inlineStr"><is><t>${_xmlEnc(d.description || '')}</t></is></c>
+            <c r="E${r}" t="inlineStr"><is><t>${_xmlEnc(d.severity || '')}</t></is></c>
+            <c r="F${r}" t="inlineStr"><is><t>${_xmlEnc(formatDate(d.date))}</t></is></c>
+            <c r="G${r}" t="inlineStr"><is><t>图片${i + 1}</t></is></c>
+          </row>`;
         }
-        const html = `<!DOCTYPE html>
-        <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-        <head><meta charset="UTF-8"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>验收清单</x:Name></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>
-        <body><table border="1" cellpadding="5">
-        <tr style="font-weight:bold;background:#2c3e50;color:white;">
-          <th>房屋</th><th>位置</th><th>工种</th><th>问题描述</th><th>严重程度</th><th>日期</th><th>图片</th>
-        </tr>${rows}
-        </table></body></html>`;
-        const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' });
+
+        // Drawing XML (image placements)
+        let drawingXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`;
+        for (let i = 0; i < media.length; i++) {
+          const row = i + 1; // 0-based row
+          drawingXml += `
+  <xdr:twoCellAnchor editAs="oneCell">
+    <xdr:from><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>7</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${row + 1}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:pic>
+      <xdr:nvPicPr>
+        <xdr:cNvPr id="${i + 1}" name="Image${i + 1}"/>
+        <xdr:cNvPicPr/>
+      </xdr:nvPicPr>
+      <xdr:blipFill><a:blip r:embed="rId${i + 1}"/></xdr:blipFill>
+      <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1143000" cy="1143000"/></a:xfrm>
+        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+      </xdr:spPr>
+    </xdr:pic>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>`;
+        }
+        drawingXml += '\n</xdr:wsDr>';
+
+        // Drawing rels (image references)
+        let drawRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`;
+        for (let i = 0; i < media.length; i++) {
+          drawRels += `\n  <Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${i + 1}.jpeg"/>`;
+        }
+        drawRels += '\n</Relationships>';
+
+        const _s = (s) => new TextEncoder().encode(s);
+
+        // Build ZIP entries (uncompressed - will be compressed per-file)
+        const parts = [
+          { name: '[Content_Types].xml', xml: `<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="jpeg" ContentType="image/jpeg"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>
+</Types>` },
+          { name: '_rels/.rels', xml: `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>` },
+          { name: 'xl/workbook.xml', xml: `<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="验收清单" sheetId="1" r:id="rId1"/></sheets>
+</workbook>` },
+          { name: 'xl/_rels/workbook.xml.rels', xml: `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>` },
+          { name: 'xl/styles.xml', xml: `<?xml version="1.0"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+  <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+</styleSheet>` },
+          { name: 'xl/worksheets/sheet1.xml', xml: `<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheetViews><sheetView tabSelected="1" workbookViewId="0">
+    <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+  </sheetView></sheetViews>
+  <cols>
+    <col min="1" max="1" width="18"/><col min="2" max="2" width="14"/>
+    <col min="3" max="3" width="10"/><col min="4" max="4" width="30"/>
+    <col min="5" max="5" width="10"/><col min="6" max="6" width="14"/>
+    <col min="7" max="7" width="18"/>
+  </cols>
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>房屋</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>位置</t></is></c>
+      <c r="C1" t="inlineStr"><is><t>工种</t></is></c>
+      <c r="D1" t="inlineStr"><is><t>问题描述</t></is></c>
+      <c r="E1" t="inlineStr"><is><t>严重程度</t></is></c>
+      <c r="F1" t="inlineStr"><is><t>日期</t></is></c>
+      <c r="G1" t="inlineStr"><is><t>图片</t></is></c>
+    </row>${sheetRows}
+  </sheetData>
+  <drawing r:id="rId1"/>
+</worksheet>` },
+          { name: 'xl/worksheets/_rels/sheet1.xml.rels', xml: `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>` },
+          { name: 'xl/drawings/drawing1.xml', xml: drawingXml },
+          { name: 'xl/drawings/_rels/drawing1.xml.rels', xml: drawRels },
+        ];
+
+        // Image files
+        for (const m of media) {
+          parts.push({ name: `xl/media/image${m.id}.jpeg`, bin: m.data });
+        }
+
+        // Build ZIP (all STORED - no compression needed)
+        const zipFiles = [];
+        for (const p of parts) {
+          zipFiles.push({ name: p.name, data: p.bin || _s(p.xml) });
+        }
+
+        const zipData = _makeZip(zipFiles);
+        const blob = new Blob([zipData], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
         const now = new Date();
         const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}-${String(now.getMinutes()).padStart(2,'0')}-${String(now.getSeconds()).padStart(2,'0')}`;
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `验收清单${ts}.xls`;
+        a.download = `验收清单${ts}.xlsx`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
