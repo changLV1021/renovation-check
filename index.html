@@ -579,6 +579,7 @@
         <button id="btn-export" class="data-btn">导出数据</button>
         <button id="btn-import" class="data-btn">导入数据</button>
         <button id="btn-excel" class="data-btn">导出 Excel</button>
+        <button id="btn-word" class="data-btn">导出 Word</button>
         <div class="storage-section">
           <button id="btn-pick-dir" class="data-btn">选择存储目录</button>
           <div id="storage-status" class="unavailable">未连接 - 点击选择目录</div>
@@ -1381,6 +1382,7 @@
     }
 
     function _xmlEnc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+    const _s = (s) => new TextEncoder().encode(s);
 
     async function exportExcel() {
       try {
@@ -1448,8 +1450,6 @@
           drawRels += `\n  <Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${i + 1}.jpeg"/>`;
         }
         drawRels += '\n</Relationships>';
-
-        const _s = (s) => new TextEncoder().encode(s);
 
         // Build ZIP entries (uncompressed - will be compressed per-file)
         const parts = [
@@ -1549,6 +1549,174 @@
       }
     }
 
+    async function exportWord() {
+      try {
+        const items = await db.getAll();
+        if (items.length === 0) { alert('没有数据可导出'); return; }
+        let filtered = items;
+        if (currentProject) filtered = filtered.filter(i => i.project === currentProject);
+
+        // Prepare media (images)
+        const media = [];
+        for (let i = 0; i < filtered.length; i++) {
+          const b64 = await blobToBase64(filtered[i].photo);
+          const mime = b64.split(',')[0].match(/:(.*?);/)[1];
+          const raw = atob(b64.split(',')[1]);
+          const bytes = new Uint8Array(raw.length);
+          for (let j = 0; j < raw.length; j++) bytes[j] = raw.charCodeAt(j);
+          const ext = mime === 'image/png' ? 'png' : 'jpeg';
+          media.push({ id: i + 1, data: bytes, ext });
+        }
+
+        // Build table rows
+        let tableRows = '';
+        for (let i = 0; i < filtered.length; i++) {
+          const d = filtered[i];
+          const imgId = media[i].id;
+          tableRows += `<w:tr>
+            <w:trPr><w:trHeight w:val="1200" w:hRule="atLeast"/></w:trPr>
+            <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${_xmlEnc(d.project || '')}</w:t></w:r></w:p></w:tc>
+            <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${_xmlEnc(d.location || '')}</w:t></w:r></w:p></w:tc>
+            <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${_xmlEnc(d.trade || '')}</w:t></w:r></w:p></w:tc>
+            <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${_xmlEnc(d.description || '')}</w:t></w:r></w:p></w:tc>
+            <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${_xmlEnc(d.severity || '')}</w:t></w:r></w:p></w:tc>
+            <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${_xmlEnc(formatDate(d.date))}</w:t></w:r></w:p></w:tc>
+            <w:tc>
+              <w:tcPr><w:vAlign w:val="center"/></w:tcPr>
+              <w:p>
+                <w:r>
+                  <w:drawing>
+                    <wp:inline distT="0" distB="0" distL="0" distR="0">
+                      <wp:extent cx="1143000" cy="914400"/>
+                      <wp:effectExtent l="0" t="0" r="0" b="0"/>
+                      <wp:docPr id="${imgId}" name="Image${imgId}"/>
+                      <wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>
+                      <a:graphic>
+                        <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                          <pic:pic>
+                            <pic:nvPicPr>
+                              <pic:cNvPr id="${imgId}" name="Image${imgId}"/>
+                              <pic:cNvPicPr/>
+                            </pic:nvPicPr>
+                            <pic:blipFill><a:blip r:embed="rId${imgId}"/></pic:blipFill>
+                            <pic:spPr>
+                              <a:xfrm><a:off x="0" y="0"/><a:ext cx="1143000" cy="914400"/></a:xfrm>
+                              <a:prstGeom prst="rect"/>
+                            </pic:spPr>
+                          </pic:pic>
+                        </a:graphicData>
+                      </a:graphic>
+                    </wp:inline>
+                  </w:drawing>
+                </w:r>
+              </w:p>
+            </w:tc>
+          </w:tr>`;
+        }
+
+        // Document XML
+        const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+  xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+  xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+  <w:body>
+    <w:p>
+      <w:pPr><w:jc w:val="center"/><w:spacing w:before="240" w:after="360"/></w:pPr>
+      <w:r>
+        <w:rPr><w:sz w:val="36"/><w:b/><w:color w:val="2c3e50"/></w:rPr>
+        <w:t>装修验收清单</w:t>
+      </w:r>
+    </w:p>
+    <w:tbl>
+      <w:tblPr>
+        <w:tblW w:w="9638" w:type="dxa"/>
+        <w:jc w:val="center"/>
+        <w:tblBorders>
+          <w:top w:val="single" w:sz="4" w:space="0" w:color="999999"/>
+          <w:left w:val="single" w:sz="4" w:space="0" w:color="999999"/>
+          <w:bottom w:val="single" w:sz="4" w:space="0" w:color="999999"/>
+          <w:right w:val="single" w:sz="4" w:space="0" w:color="999999"/>
+          <w:insideH w:val="single" w:sz="4" w:space="0" w:color="999999"/>
+          <w:insideV w:val="single" w:sz="4" w:space="0" w:color="999999"/>
+        </w:tblBorders>
+        <w:tblLook w:val="04A0"/>
+      </w:tblPr>
+      <w:tblGrid>
+        <w:gridCol w:w="1300"/>
+        <w:gridCol w:w="1100"/>
+        <w:gridCol w:w="800"/>
+        <w:gridCol w:w="2500"/>
+        <w:gridCol w:w="800"/>
+        <w:gridCol w:w="1100"/>
+        <w:gridCol w:w="2038"/>
+      </w:tblGrid>
+      <w:tr>
+        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>房屋</w:t></w:r></w:p></w:tc>
+        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>位置</w:t></w:r></w:p></w:tc>
+        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>工种</w:t></w:r></w:p></w:tc>
+        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>问题描述</w:t></w:r></w:p></w:tc>
+        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>严重程度</w:t></w:r></w:p></w:tc>
+        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>日期</w:t></w:r></w:p></w:tc>
+        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>图片</w:t></w:r></w:p></w:tc>
+      </w:tr>${tableRows}
+    </w:tbl>
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1134" w:right="850" w:bottom="1134" w:left="850"/>
+    </w:sectPr>
+  </w:body>
+</w:document>`;
+
+        // Document relationships (image references)
+        let docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`;
+        for (const m of media) {
+          docRels += `\n  <Relationship Id="rId${m.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image${m.id}.${m.ext}"/>`;
+        }
+        docRels += '\n</Relationships>';
+
+        // Build ZIP parts
+        const parts = [
+          { name: '[Content_Types].xml', xml: `<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="jpeg" ContentType="image/jpeg"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>` },
+          { name: '_rels/.rels', xml: `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>` },
+          { name: 'word/document.xml', xml: docXml },
+          { name: 'word/_rels/document.xml.rels', xml: docRels },
+        ];
+        for (const m of media) {
+          parts.push({ name: `word/media/image${m.id}.${m.ext}`, bin: m.data });
+        }
+
+        const zipFiles = parts.map(p => ({ name: p.name, data: p.bin || _s(p.xml) }));
+        const zipData = _makeZip(zipFiles);
+        const blob = new Blob([zipData], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+        const now = new Date();
+        const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}-${String(now.getMinutes()).padStart(2,'0')}-${String(now.getSeconds()).padStart(2,'0')}`;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `验收清单${ts}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        alert('导出 Word 失败：' + err.message);
+        console.error('Word export error:', err);
+      }
+    }
+
     async function importData() {
       const input = document.createElement('input');
       input.type = 'file';
@@ -1593,6 +1761,7 @@
     document.getElementById('btn-export').addEventListener('click', exportData);
     document.getElementById('btn-import').addEventListener('click', importData);
     document.getElementById('btn-excel').addEventListener('click', exportExcel);
+    document.getElementById('btn-word').addEventListener('click', exportWord);
 
     // --- File System Storage ---
 
