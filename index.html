@@ -87,6 +87,55 @@
       background: rgba(0,0,0,0.05);
     }
 
+    /* Project Selector */
+    .project-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      position: relative;
+    }
+    .project-selector {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: var(--card);
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      color: var(--text);
+      user-select: none;
+    }
+    .project-selector:active { background: #eee; }
+    .project-arrow { font-size: 10px; color: var(--text-secondary); margin-left: 6px; }
+    .project-dropdown {
+      position: absolute;
+      top: 100%; left: 0; right: 0;
+      background: var(--card);
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      z-index: 20;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .project-dropdown-item {
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 14px;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    .project-dropdown-item:last-child { border-bottom: none; }
+    .project-dropdown-item:active { background: #f5f5f5; }
+    .project-dropdown-item.active {
+      color: var(--primary);
+      font-weight: 600;
+      background: rgba(44,62,80,0.06);
+    }
+
     #data-panel {
       margin-bottom: 12px;
       display: flex;
@@ -466,6 +515,20 @@
       margin-top: 12px;
     }
 
+    .btn-watermark {
+      width: 100%;
+      padding: 14px;
+      border-radius: 8px;
+      background: var(--primary);
+      color: white;
+      font-size: 15px;
+      font-weight: 500;
+      border: none;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    .btn-watermark:active { opacity: 0.8; }
+
     /* Animation */
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(6px); }
@@ -482,6 +545,14 @@
         <h1>装修验收清单</h1>
         <button id="btn-settings" class="btn-settings">&#x2699;</button>
       </div>
+      <div class="project-row">
+        <div id="project-selector" class="project-selector">
+          <span id="project-name">选择房屋</span>
+          <span class="project-arrow">▼</span>
+        </div>
+        <button id="btn-add-project" class="data-btn" style="flex:none;padding:6px 12px;white-space:nowrap;">+ 房屋</button>
+      </div>
+      <div id="project-dropdown" class="project-dropdown hidden"></div>
       <div id="data-panel" class="hidden">
         <button id="btn-export" class="data-btn">导出数据</button>
         <button id="btn-import" class="data-btn">导入数据</button>
@@ -698,6 +769,66 @@
       },
     };
 
+    // --- Project management ---
+    let projects = [];
+    let currentProject = ''; // empty = show all
+
+    async function loadProjects() {
+      const list = await meta.get('projects');
+      projects = list || [];
+    }
+
+    async function saveProjects() {
+      await meta.put('projects', projects);
+    }
+
+    function renderProjectUI() {
+      document.getElementById('project-name').textContent = currentProject || '全部房屋';
+      const dropdown = document.getElementById('project-dropdown');
+      let html = `<div class="project-dropdown-item${currentProject === '' ? ' active' : ''}" data-project="">全部房屋</div>`;
+      for (const p of projects) {
+        html += `<div class="project-dropdown-item${currentProject === p ? ' active' : ''}" data-project="${escapeHtml(p)}">${escapeHtml(p)}</div>`;
+      }
+      dropdown.innerHTML = html;
+    }
+
+    document.getElementById('project-selector').addEventListener('click', () => {
+      renderProjectUI();
+      document.getElementById('project-dropdown').classList.toggle('hidden');
+    });
+
+    // Close project dropdown on outside click
+    document.addEventListener('click', (e) => {
+      const dd = document.getElementById('project-dropdown');
+      if (dd.classList.contains('hidden')) return;
+      if (e.target.closest('#project-selector') || e.target.closest('#project-dropdown')) return;
+      dd.classList.add('hidden');
+    });
+
+    document.getElementById('project-dropdown').addEventListener('click', (e) => {
+      const item = e.target.closest('.project-dropdown-item');
+      if (!item) return;
+      currentProject = item.dataset.project;
+      document.getElementById('project-dropdown').classList.add('hidden');
+      renderProjectUI();
+      refreshList();
+    });
+
+    document.getElementById('btn-add-project').addEventListener('click', () => {
+      const name = prompt('请输入房屋名称：');
+      if (!name || !name.trim()) return;
+      const trimmed = name.trim();
+      if (projects.includes(trimmed)) {
+        alert('该房屋已存在');
+        return;
+      }
+      projects.push(trimmed);
+      saveProjects();
+      currentProject = trimmed;
+      renderProjectUI();
+      refreshList();
+    });
+
     function compressImage(file, maxWidth = 1024, quality = 0.7) {
       return new Promise((resolve) => {
         const reader = new FileReader();
@@ -764,10 +895,13 @@
     function refreshList() {
       db.getAll().then(items => {
         let filtered = items;
+        if (currentProject) {
+          filtered = items.filter(i => i.project === currentProject);
+        }
         if (currentFilter === 'pending') {
-          filtered = items.filter(i => i.status === 'pending');
+          filtered = filtered.filter(i => i.status === 'pending');
         } else if (currentFilter === 'passed') {
-          filtered = items.filter(i => i.status === 'passed');
+          filtered = filtered.filter(i => i.status === 'passed');
         }
         renderList(filtered);
       });
@@ -829,6 +963,7 @@
         location: document.getElementById('input-location').value.trim(),
         severity: document.querySelector('input[name="severity"]:checked')?.value || '一般',
         trade: document.querySelector('input[name="trade"]:checked')?.value || '其他',
+        project: currentProject || '',
         date: new Date().toISOString(),
         status: 'pending',
         passedAt: null,
@@ -860,6 +995,10 @@
           <div class="field-value">${escapeHtml(item.location || '未填写')}</div>
         </div>
         <div class="detail-field">
+          <div class="field-label">房屋</div>
+          <div class="field-value">${escapeHtml(item.project || '未设置')}</div>
+        </div>
+        <div class="detail-field">
           <div class="field-label">严重程度</div>
           <div class="field-value"><span class="severity-tag ${item.severity || '一般'}">${item.severity || '一般'}</span></div>
         </div>
@@ -879,6 +1018,7 @@
         ` : `
         <button id="btn-pass" class="btn-pass">✓ 通过验收</button>
         `}
+        <button id="btn-watermark" class="btn-watermark">保存水印照</button>
       `;
 
       // Add pass button handler
@@ -897,6 +1037,9 @@
           }
         });
       }
+
+      // Add watermark button handler
+      document.getElementById('btn-watermark').addEventListener('click', () => saveWatermarkedImage(item));
     }
 
     // --- Export / Import ---
@@ -918,6 +1061,79 @@
       return new Blob([arr], { type: mime });
     }
 
+    // --- Watermark ---
+
+    function generateWatermark(photoBlob, project, location, description) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+
+          const desc = (description || '').slice(0, 20);
+          const lines = [project || '', location || '', desc].filter(l => l.length > 0);
+          if (lines.length === 0) { canvas.toBlob(resolve, 'image/jpeg', 0.92); return; }
+
+          const fontSize = Math.max(14, Math.min(28, img.width * 0.04));
+          ctx.font = `bold ${fontSize}px sans-serif`;
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'bottom';
+
+          const padding = 14;
+          const lineHeight = fontSize * 1.6;
+          const bgPad = 10;
+          const widths = lines.map(l => ctx.measureText(l).width);
+          const maxW = Math.max(...widths);
+          const bgW = maxW + bgPad * 2;
+          const bgH = lines.length * lineHeight + bgPad;
+
+          // Draw background
+          const bgX = img.width - padding - bgW;
+          const bgY = img.height - padding - bgH;
+          ctx.fillStyle = 'rgba(0,0,0,0.55)';
+          ctx.fillRect(bgX, bgY, bgW, bgH);
+
+          // Draw text (top-to-bottom: house, location, description)
+          ctx.fillStyle = '#ffffff';
+          let textY = img.height - padding - bgPad / 2;
+          for (let i = lines.length - 1; i >= 0; i--) {
+            ctx.fillText(lines[i], img.width - padding, textY);
+            textY -= lineHeight;
+          }
+
+          canvas.toBlob(resolve, 'image/jpeg', 0.92);
+        };
+        img.src = URL.createObjectURL(photoBlob);
+      });
+    }
+
+    async function saveWatermarkedImage(item) {
+      try {
+        const blob = await generateWatermark(item.photo, item.project || '', item.location || '', item.description || '');
+        // Try native share (mobile-friendly, offers save to gallery)
+        if (navigator.canShare && navigator.canShare({ files: [new File([blob], 'watermark.jpg', { type: 'image/jpeg' })] })) {
+          await navigator.share({ files: [new File([blob], 'watermark.jpg', { type: 'image/jpeg' })] });
+          return;
+        }
+        // Fallback: download
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `水印_${item.id}.jpg`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        if (err.name === 'AbortError') return; // user cancelled share
+        alert('保存水印照片失败');
+        console.error('Watermark error:', err);
+      }
+    }
+
     async function exportData() {
       try {
         const items = await db.getAll();
@@ -934,6 +1150,7 @@
             location: item.location,
             severity: item.severity,
             trade: item.trade,
+            project: item.project || '',
             date: item.date,
             status: item.status,
             passedAt: item.passedAt,
@@ -1032,6 +1249,7 @@
             location: item.location,
             severity: item.severity,
             trade: item.trade,
+            project: item.project || '',
             date: item.date,
             status: item.status,
             passedAt: item.passedAt,
@@ -1257,6 +1475,8 @@
       try {
         await openDB();
         initFilterButtons();
+        await loadProjects();
+        renderProjectUI();
         // Restore saved directory handle
         if (window.showDirectoryPicker) {
           try {
