@@ -647,6 +647,13 @@
         </div>
       </div>
 
+      <div class="form-group" id="project-field">
+        <label class="form-label">房屋</label>
+        <select id="input-project" class="form-input">
+          <option value="">无</option>
+        </select>
+      </div>
+
       <button type="submit" id="btn-save" class="btn-primary" disabled>保存</button>
     </form>
   </section>
@@ -1001,6 +1008,13 @@
       document.querySelector('input[name="trade"][value="油漆"]').checked = true;
     }
 
+    function populateProjectSelect(selected) {
+      const sel = document.getElementById('input-project');
+      sel.innerHTML = '<option value="">无</option>' +
+        projects.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+      sel.value = selected || '';
+    }
+
     function showEditView(item) {
       editingId = item.id;
       document.getElementById('input-desc').value = item.description || '';
@@ -1009,6 +1023,7 @@
       if (s) s.checked = true;
       const t = document.querySelector(`input[name="trade"][value="${item.trade || '其他'}"]`);
       if (t) t.checked = true;
+      populateProjectSelect(item.project || '');
 
       capturedPhoto = item.photo;
       const preview = document.getElementById('photo-preview');
@@ -1037,7 +1052,7 @@
           location: document.getElementById('input-location').value.trim(),
           severity: document.querySelector('input[name="severity"]:checked')?.value || '一般',
           trade: document.querySelector('input[name="trade"]:checked')?.value || '其他',
-          project: original.project || currentProject || '',
+          project: document.getElementById('input-project').value,
           date: original.date,
           status: original.status,
           passedAt: original.passedAt,
@@ -1062,7 +1077,7 @@
         location: document.getElementById('input-location').value.trim(),
         severity: document.querySelector('input[name="severity"]:checked')?.value || '一般',
         trade: document.querySelector('input[name="trade"]:checked')?.value || '其他',
-        project: currentProject || '',
+        project: document.getElementById('input-project').value,
         date: new Date().toISOString(),
         status: 'pending',
         passedAt: null,
@@ -1598,6 +1613,7 @@
 
     document.getElementById('btn-add').addEventListener('click', () => {
       resetForm();
+      populateProjectSelect(currentProject);
       showView('add');
     });
 
