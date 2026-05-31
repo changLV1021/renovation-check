@@ -113,12 +113,12 @@
     .project-arrow { font-size: 10px; color: var(--text-secondary); margin-left: 6px; }
     .project-dropdown {
       position: absolute;
-      top: 100%; left: 0; right: 0;
+      top: calc(100% + 4px); left: 0; right: 0;
       background: var(--card);
       border: 1px solid #ddd;
       border-radius: 8px;
       box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-      z-index: 20;
+      z-index: 30;
       max-height: 200px;
       overflow-y: auto;
     }
@@ -551,8 +551,8 @@
           <span class="project-arrow">▼</span>
         </div>
         <button id="btn-add-project" class="data-btn" style="flex:none;padding:6px 12px;white-space:nowrap;">+ 房屋</button>
+        <div id="project-dropdown" class="project-dropdown hidden"></div>
       </div>
-      <div id="project-dropdown" class="project-dropdown hidden"></div>
       <div id="data-panel" class="hidden">
         <button id="btn-export" class="data-btn">导出数据</button>
         <button id="btn-import" class="data-btn">导入数据</button>
@@ -974,6 +974,8 @@
         resetForm();
         showView('list');
         refreshList();
+        // Auto-save watermarked image (non-blocking)
+        saveWatermarkedImage(item).catch(() => {});
       } catch (err) {
         alert('保存失败，请重试');
         console.error('Save error:', err);
