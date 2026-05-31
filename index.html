@@ -1404,14 +1404,14 @@
         for (let i = 0; i < filtered.length; i++) {
           const r = i + 2;
           const d = filtered[i];
-          sheetRows += `<row r="${r}">
-            <c r="A${r}" t="inlineStr"><is><t>${_xmlEnc(d.project || '')}</t></is></c>
-            <c r="B${r}" t="inlineStr"><is><t>${_xmlEnc(d.location || '')}</t></is></c>
-            <c r="C${r}" t="inlineStr"><is><t>${_xmlEnc(d.trade || '')}</t></is></c>
-            <c r="D${r}" t="inlineStr"><is><t>${_xmlEnc(d.description || '')}</t></is></c>
-            <c r="E${r}" t="inlineStr"><is><t>${_xmlEnc(d.severity || '')}</t></is></c>
-            <c r="F${r}" t="inlineStr"><is><t>${_xmlEnc(formatDate(d.date))}</t></is></c>
-            <c r="G${r}" t="inlineStr"><is><t>图片${i + 1}</t></is></c>
+          sheetRows += `<row r="${r}" ht="170" customHeight="1">
+            <c r="A${r}" t="inlineStr" s="1"><is><t>${_xmlEnc(d.project || '')}</t></is></c>
+            <c r="B${r}" t="inlineStr" s="1"><is><t>${_xmlEnc(d.location || '')}</t></is></c>
+            <c r="C${r}" t="inlineStr" s="1"><is><t>${_xmlEnc(d.trade || '')}</t></is></c>
+            <c r="D${r}" t="inlineStr" s="1"><is><t>${_xmlEnc(d.description || '')}</t></is></c>
+            <c r="E${r}" t="inlineStr" s="1"><is><t>${_xmlEnc(d.severity || '')}</t></is></c>
+            <c r="F${r}" t="inlineStr" s="1"><is><t>${_xmlEnc(formatDate(d.date))}</t></is></c>
+            <c r="G${r}" t="inlineStr" s="1"><is><t>图片${i + 1}</t></is></c>
           </row>`;
         }
 
@@ -1432,7 +1432,7 @@
         <xdr:cNvPicPr/>
       </xdr:nvPicPr>
       <xdr:blipFill><a:blip r:embed="rId${i + 1}"/></xdr:blipFill>
-      <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1143000" cy="1143000"/></a:xfrm>
+      <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1600000" cy="2000000"/></a:xfrm>
         <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
       </xdr:spPr>
     </xdr:pic>
@@ -1482,7 +1482,10 @@
   <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
   <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+  <cellXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
+  </cellXfs>
 </styleSheet>` },
           { name: 'xl/worksheets/sheet1.xml', xml: `<?xml version="1.0"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -1493,8 +1496,8 @@
   <cols>
     <col min="1" max="1" width="18"/><col min="2" max="2" width="14"/>
     <col min="3" max="3" width="10"/><col min="4" max="4" width="30"/>
-    <col min="5" max="5" width="10"/><col min="6" max="6" width="14"/>
-    <col min="7" max="7" width="18"/>
+    <col min="5" max="5" width="10"/><col min="6" max="6" width="16"/>
+    <col min="7" max="7" width="25"/>
   </cols>
   <sheetData>
     <row r="1">
