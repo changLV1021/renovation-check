@@ -196,6 +196,28 @@
       border-color: var(--primary);
     }
 
+    #trade-filter-bar {
+      display: flex;
+      flex-direction: row;
+      gap: 6px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+    .trade-filter-btn {
+      border-radius: 20px;
+      padding: 6px 14px;
+      border: 1px solid #ddd;
+      background: transparent;
+      font-size: 13px;
+      cursor: pointer;
+      color: var(--text);
+    }
+    .trade-filter-btn.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
     /* List Cards */
     .empty-state {
       text-align: center;
@@ -556,6 +578,7 @@
       <div id="data-panel" class="hidden">
         <button id="btn-export" class="data-btn">导出数据</button>
         <button id="btn-import" class="data-btn">导入数据</button>
+        <button id="btn-excel" class="data-btn">导出 Excel</button>
         <div class="storage-section">
           <button id="btn-pick-dir" class="data-btn">选择存储目录</button>
           <div id="storage-status" class="unavailable">未连接 - 点击选择目录</div>
@@ -565,6 +588,14 @@
         <button class="filter-btn active" data-filter="all">全部</button>
         <button class="filter-btn" data-filter="pending">待验收</button>
         <button class="filter-btn" data-filter="passed">已通过</button>
+      </div>
+      <div id="trade-filter-bar">
+        <button class="trade-filter-btn active" data-trade="">全部</button>
+        <button class="trade-filter-btn" data-trade="水电">水电</button>
+        <button class="trade-filter-btn" data-trade="木工">木工</button>
+        <button class="trade-filter-btn" data-trade="油漆">油漆</button>
+        <button class="trade-filter-btn" data-trade="瓦工">瓦工</button>
+        <button class="trade-filter-btn" data-trade="其他">其他</button>
       </div>
     </header>
     <div id="item-list">
@@ -891,12 +922,17 @@
     }
 
     let currentFilter = 'all';
+    let currentTradeFilter = '';
+    let editingId = null;
 
     function refreshList() {
       db.getAll().then(items => {
         let filtered = items;
         if (currentProject) {
-          filtered = items.filter(i => i.project === currentProject);
+          filtered = filtered.filter(i => i.project === currentProject);
+        }
+        if (currentTradeFilter) {
+          filtered = filtered.filter(i => i.trade === currentTradeFilter);
         }
         if (currentFilter === 'pending') {
           filtered = filtered.filter(i => i.status === 'pending');
@@ -912,6 +948,17 @@
         btn.addEventListener('click', () => {
           currentFilter = btn.dataset.filter;
           document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          refreshList();
+        });
+      });
+    }
+
+    function initTradeFilter() {
+      document.querySelectorAll('.trade-filter-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          currentTradeFilter = btn.dataset.trade;
+          document.querySelectorAll('.trade-filter-btn').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
           refreshList();
         });
@@ -940,21 +987,73 @@
     });
 
     function resetForm() {
+      editingId = null;
       capturedPhoto = null;
       document.getElementById('add-form').reset();
       document.getElementById('photo-preview').src = '';
       document.getElementById('photo-preview').classList.add('hidden');
       document.getElementById('photo-placeholder-text').classList.remove('hidden');
       document.getElementById('photo-area').classList.remove('has-image');
+      document.getElementById('photo-area').style.pointerEvents = '';
       document.getElementById('btn-save').disabled = true;
-      // Reset radio buttons to defaults
+      document.getElementById('btn-save').textContent = '保存';
       document.querySelector('input[name="severity"][value="一般"]').checked = true;
       document.querySelector('input[name="trade"][value="油漆"]').checked = true;
+    }
+
+    function showEditView(item) {
+      editingId = item.id;
+      document.getElementById('input-desc').value = item.description || '';
+      document.getElementById('input-location').value = item.location || '';
+      const s = document.querySelector(`input[name="severity"][value="${item.severity || '一般'}"]`);
+      if (s) s.checked = true;
+      const t = document.querySelector(`input[name="trade"][value="${item.trade || '其他'}"]`);
+      if (t) t.checked = true;
+
+      capturedPhoto = item.photo;
+      const preview = document.getElementById('photo-preview');
+      preview.src = URL.createObjectURL(item.photo);
+      preview.classList.remove('hidden');
+      document.getElementById('photo-placeholder-text').classList.add('hidden');
+      document.getElementById('photo-area').classList.add('has-image');
+      document.getElementById('photo-area').style.pointerEvents = 'none';
+      document.getElementById('btn-save').disabled = false;
+      document.getElementById('btn-save').textContent = '保存修改';
+
+      showView('add');
     }
 
     document.getElementById('add-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!capturedPhoto) return;
+
+      if (editingId) {
+        const original = await db.get(editingId);
+        if (!original) { alert('记录不存在'); return; }
+        const updated = {
+          id: editingId,
+          photo: capturedPhoto,
+          description: document.getElementById('input-desc').value.trim(),
+          location: document.getElementById('input-location').value.trim(),
+          severity: document.querySelector('input[name="severity"]:checked')?.value || '一般',
+          trade: document.querySelector('input[name="trade"]:checked')?.value || '其他',
+          project: original.project || currentProject || '',
+          date: original.date,
+          status: original.status,
+          passedAt: original.passedAt,
+        };
+        try {
+          await db.update(updated);
+          editingId = null;
+          resetForm();
+          showView('list');
+          refreshList();
+        } catch (err) {
+          alert('保存失败，请重试');
+          console.error('Update error:', err);
+        }
+        return;
+      }
 
       const item = {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -1020,6 +1119,7 @@
         ` : `
         <button id="btn-pass" class="btn-pass">✓ 通过验收</button>
         `}
+        <button id="btn-edit" class="btn-watermark" style="background:var(--text-secondary);">编辑</button>
         <button id="btn-watermark" class="btn-watermark">保存水印照</button>
       `;
 
@@ -1042,6 +1142,9 @@
 
       // Add watermark button handler
       document.getElementById('btn-watermark').addEventListener('click', () => saveWatermarkedImage(item));
+
+      // Add edit button handler
+      document.getElementById('btn-edit').addEventListener('click', () => showEditView(item));
     }
 
     // --- Export / Import ---
@@ -1175,6 +1278,52 @@
       }
     }
 
+    async function exportExcel() {
+      try {
+        const items = await db.getAll();
+        if (items.length === 0) { alert('没有数据可导出'); return; }
+        let filtered = items;
+        if (currentProject) {
+          filtered = filtered.filter(i => i.project === currentProject);
+        }
+        let rows = '';
+        for (const item of filtered) {
+          const b64 = await blobToBase64(item.photo);
+          rows += `<tr>
+            <td>${escapeHtml(item.project || '')}</td>
+            <td>${escapeHtml(item.location || '')}</td>
+            <td>${escapeHtml(item.trade || '')}</td>
+            <td>${escapeHtml(item.description || '')}</td>
+            <td>${escapeHtml(item.severity || '')}</td>
+            <td>${formatDate(item.date)}</td>
+            <td><img src="${b64}" width="120"></td>
+          </tr>`;
+        }
+        const html = `<!DOCTYPE html>
+        <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+        <head><meta charset="UTF-8"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>验收清单</x:Name></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>
+        <body><table border="1" cellpadding="5">
+        <tr style="font-weight:bold;background:#2c3e50;color:white;">
+          <th>房屋</th><th>位置</th><th>工种</th><th>问题描述</th><th>严重程度</th><th>日期</th><th>图片</th>
+        </tr>${rows}
+        </table></body></html>`;
+        const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8' });
+        const now = new Date();
+        const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}-${String(now.getMinutes()).padStart(2,'0')}-${String(now.getSeconds()).padStart(2,'0')}`;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `验收清单${ts}.xls`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        alert('导出 Excel 失败：' + err.message);
+        console.error('Excel export error:', err);
+      }
+    }
+
     async function importData() {
       const input = document.createElement('input');
       input.type = 'file';
@@ -1218,6 +1367,7 @@
 
     document.getElementById('btn-export').addEventListener('click', exportData);
     document.getElementById('btn-import').addEventListener('click', importData);
+    document.getElementById('btn-excel').addEventListener('click', exportExcel);
 
     // --- File System Storage ---
 
@@ -1477,6 +1627,7 @@
       try {
         await openDB();
         initFilterButtons();
+        initTradeFilter();
         await loadProjects();
         renderProjectUI();
         // Restore saved directory handle
