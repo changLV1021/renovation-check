@@ -1309,69 +1309,80 @@
       return (crc ^ -1) >>> 0;
     }
 
-    function _u16(v) { return [v & 0xFF, (v >> 8) & 0xFF]; }
-    function _u32(v) { return [v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF]; }
 
     function _makeZip(files) {
-      // files: [{name: string, data: Uint8Array, method?: number}]
-      // method: 0=STORED(default), 8=DEFLATED
+      // files: [{name: string, data: Uint8Array}]
+      // All entries are STORED (uncompressed)
+      const UTF8_FLAG = 1 << 11;
       const entries = [];
       let offset = 0, cd = [];
+
       for (const f of files) {
         const nameB = new TextEncoder().encode(f.name);
         const crc = _crc32(f.data);
-        const method = f.method || 0;
+        const len = f.data.length;
+
+        // Local file header (30 bytes + name)
         const h = new Uint8Array(30 + nameB.length);
-        h.set(_u32(0x04034b50), 0); // signature
-        h.set(_u16(20), 4); // version needed
-        h.set(_u16(0), 6); // flags
-        h.set(_u16(method), 8); // compression method
-        h.set(_u16(0), 10); // mtime
-        h.set(_u16(0), 12); // mdate
-        h.set(_u32(crc), 14);
-        h.set(_u32(f.data.length), 18); // compressed size
-        h.set(_u32(f.data.length), 22); // uncompressed size
-        h.set(_u16(nameB.length), 26);
-        h.set(_u16(0), 28);
+        let p = 0;
+        p = _set32(h, p, 0x04034b50);       // signature
+        p = _set16(h, p, 20);                // version needed (2.0)
+        p = _set16(h, p, UTF8_FLAG);          // flags (UTF-8 filename)
+        p = _set16(h, p, 0);                  // method (STORED)
+        p = _set16(h, p, 0);                  // mtime
+        p = _set16(h, p, 0);                  // mdate
+        p = _set32(h, p, crc);                // crc-32
+        p = _set32(h, p, len);                // csize
+        p = _set32(h, p, len);                // usize
+        p = _set16(h, p, nameB.length);       // filename length
+        _set16(h, p, 0);                      // extra length
         h.set(nameB, 30);
         entries.push(h, f.data);
-        cd.push({ nameB, crc, len: f.data.length, offset, method });
-        offset += h.length + f.data.length;
+
+        cd.push({ nameB, crc, len, offset });
+        offset += h.length + len;
       }
-      const cdParts = [];
+
+      // Central directory
       let cdOffset = offset;
+      const cdParts = [];
       for (const e of cd) {
         const ce = new Uint8Array(46 + e.nameB.length);
-        ce.set(_u32(0x02014b50), 0);
-        ce.set(_u16(20), 4);
-        ce.set(_u16(20), 6);
-        ce.set(_u16(e.method), 8);
-        ce.set(_u16(0), 10);
-        ce.set(_u16(0), 12);
-        ce.set(_u16(0), 14);
-        ce.set(_u32(e.crc), 16);
-        ce.set(_u32(e.len), 20);
-        ce.set(_u32(e.len), 24);
-        ce.set(_u16(e.nameB.length), 28);
-        ce.set(_u16(0), 30);
-        ce.set(_u16(0), 32);
-        ce.set(_u16(0), 34);
-        ce.set(_u16(0), 36);
-        ce.set(_u32(0), 38);
-        ce.set(_u32(e.offset), 42);
+        let p = 0;
+        p = _set32(ce, p, 0x02014b50);        // signature
+        p = _set16(ce, p, 20);                 // version made by
+        p = _set16(ce, p, 20);                 // version needed
+        p = _set16(ce, p, UTF8_FLAG);          // flags (UTF-8 filename)
+        p = _set16(ce, p, 0);                  // method (STORED)
+        p = _set16(ce, p, 0);                  // mtime
+        p = _set16(ce, p, 0);                  // mdate
+        p = _set32(ce, p, e.crc);              // crc-32
+        p = _set32(ce, p, e.len);              // csize
+        p = _set32(ce, p, e.len);              // usize
+        p = _set16(ce, p, e.nameB.length);     // filename length
+        p = _set16(ce, p, 0);                  // extra length
+        p = _set16(ce, p, 0);                  // comment length
+        p = _set16(ce, p, 0);                  // disk number
+        p = _set16(ce, p, 0);                  // internal attrs
+        p = _set32(ce, p, 0);                  // external attrs
+        _set32(ce, p, e.offset);               // relative offset
         ce.set(e.nameB, 46);
         cdParts.push(ce);
         cdOffset += ce.length;
       }
+
+      // EOCD
+      const cdSize = cdParts.reduce((a, c) => a + c.length, 0);
       const eocd = new Uint8Array(22);
-      eocd.set(_u32(0x06054b50), 0);
-      eocd.set(_u16(0), 4);
-      eocd.set(_u16(0), 6);
-      eocd.set(_u16(cd.length), 8);
-      eocd.set(_u16(cd.length), 10);
-      eocd.set(_u32(cdParts.reduce((a, c) => a + c.length, 0)), 12);
-      eocd.set(_u32(cdOffset), 16);
-      eocd.set(_u16(0), 20);
+      let ep = 0;
+      ep = _set32(eocd, ep, 0x06054b50);      // signature
+      ep = _set16(eocd, ep, 0);                // disk #
+      ep = _set16(eocd, ep, 0);                // cd disk #
+      ep = _set16(eocd, ep, cd.length);        // entries on disk
+      ep = _set16(eocd, ep, cd.length);        // total entries
+      ep = _set32(eocd, ep, cdSize);           // cd size
+      ep = _set32(eocd, ep, offset);           // cd offset (== end of file data)
+      _set16(eocd, ep, 0);                     // comment length
 
       const all = [].concat(entries, cdParts, [eocd]);
       const total = all.reduce((a, c) => a + c.length, 0);
@@ -1380,6 +1391,10 @@
       for (const p of all) { result.set(p, pos); pos += p.length; }
       return result;
     }
+
+    // Stream-style helpers for ZIP (little-endian)
+    function _set16(buf, off, v) { buf.set([v & 0xFF, (v >> 8) & 0xFF], off); return off + 2; }
+    function _set32(buf, off, v) { buf.set([v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF], off); return off + 4; }
 
     function _xmlEnc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
     const _s = (s) => new TextEncoder().encode(s);
@@ -1568,50 +1583,80 @@
           media.push({ id: i + 1, data: bytes, ext });
         }
 
-        // Build table rows
-        let tableRows = '';
+        // Build document body (document-style, not table)
+        let docBody = '';
         for (let i = 0; i < filtered.length; i++) {
           const d = filtered[i];
           const imgId = media[i].id;
-          tableRows += `<w:tr>
-            <w:trPr><w:trHeight w:val="1200" w:hRule="atLeast"/></w:trPr>
-            <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${_xmlEnc(d.project || '')}</w:t></w:r></w:p></w:tc>
-            <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${_xmlEnc(d.location || '')}</w:t></w:r></w:p></w:tc>
-            <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${_xmlEnc(d.trade || '')}</w:t></w:r></w:p></w:tc>
-            <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${_xmlEnc(d.description || '')}</w:t></w:r></w:p></w:tc>
-            <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${_xmlEnc(d.severity || '')}</w:t></w:r></w:p></w:tc>
-            <w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${_xmlEnc(formatDate(d.date))}</w:t></w:r></w:p></w:tc>
-            <w:tc>
-              <w:tcPr><w:vAlign w:val="center"/></w:tcPr>
-              <w:p>
-                <w:r>
-                  <w:drawing>
-                    <wp:inline distT="0" distB="0" distL="0" distR="0">
-                      <wp:extent cx="1143000" cy="914400"/>
-                      <wp:effectExtent l="0" t="0" r="0" b="0"/>
-                      <wp:docPr id="${imgId}" name="Image${imgId}"/>
-                      <wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>
-                      <a:graphic>
-                        <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
-                          <pic:pic>
-                            <pic:nvPicPr>
-                              <pic:cNvPr id="${imgId}" name="Image${imgId}"/>
-                              <pic:cNvPicPr/>
-                            </pic:nvPicPr>
-                            <pic:blipFill><a:blip r:embed="rId${imgId}"/></pic:blipFill>
-                            <pic:spPr>
-                              <a:xfrm><a:off x="0" y="0"/><a:ext cx="1143000" cy="914400"/></a:xfrm>
-                              <a:prstGeom prst="rect"/>
-                            </pic:spPr>
-                          </pic:pic>
-                        </a:graphicData>
-                      </a:graphic>
-                    </wp:inline>
-                  </w:drawing>
-                </w:r>
-              </w:p>
-            </w:tc>
-          </w:tr>`;
+          if (i > 0) {
+            docBody += `
+    <w:p>
+      <w:pPr>
+        <w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="CCCCCC"/></w:pBdr>
+        <w:spacing w:after="240" w:before="240"/>
+      </w:pPr>
+    </w:p>`;
+          }
+          docBody += `
+    <w:p>
+      <w:pPr><w:spacing w:after="200" w:before="120"/></w:pPr>
+      <w:r>
+        <w:rPr><w:sz w:val="28"/><w:b/><w:color w:val="2c3e50"/></w:rPr>
+        <w:t>问题${i + 1}</w:t>
+      </w:r>
+    </w:p>`;
+          const fields = [
+            { label: '房屋', val: d.project },
+            { label: '位置', val: d.location },
+            { label: '问题描述', val: d.description },
+            { label: '严重程度', val: d.severity },
+            { label: '工种', val: d.trade },
+            { label: '记录时间', val: formatDate(d.date) },
+          ];
+          for (const f of fields) {
+            if (!f.val) continue;
+            docBody += `
+    <w:p>
+      <w:pPr><w:spacing w:after="60"/></w:pPr>
+      <w:r>
+        <w:rPr><w:sz w:val="20"/><w:b/></w:rPr>
+        <w:t>${_xmlEnc(f.label)}：</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr><w:sz w:val="20"/></w:rPr>
+        <w:t>${_xmlEnc(f.val)}</w:t>
+      </w:r>
+    </w:p>`;
+          }
+          docBody += `
+    <w:p>
+      <w:pPr><w:spacing w:after="120"/></w:pPr>
+      <w:r>
+        <w:drawing>
+          <wp:inline distT="0" distB="0" distL="0" distR="0">
+            <wp:extent cx="1828800" cy="1371600"/>
+            <wp:effectExtent l="0" t="0" r="0" b="0"/>
+            <wp:docPr id="${imgId}" name="Image${imgId}"/>
+            <wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>
+            <a:graphic>
+              <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                <pic:pic>
+                  <pic:nvPicPr>
+                    <pic:cNvPr id="${imgId}" name="Image${imgId}"/>
+                    <pic:cNvPicPr/>
+                  </pic:nvPicPr>
+                  <pic:blipFill><a:blip r:embed="rId${imgId}"/></pic:blipFill>
+                  <pic:spPr>
+                    <a:xfrm><a:off x="0" y="0"/><a:ext cx="1828800" cy="1371600"/></a:xfrm>
+                    <a:prstGeom prst="rect"/>
+                  </pic:spPr>
+                </pic:pic>
+              </a:graphicData>
+            </a:graphic>
+          </wp:inline>
+        </w:drawing>
+      </w:r>
+    </w:p>`;
         }
 
         // Document XML
@@ -1628,40 +1673,7 @@
         <w:rPr><w:sz w:val="36"/><w:b/><w:color w:val="2c3e50"/></w:rPr>
         <w:t>装修验收清单</w:t>
       </w:r>
-    </w:p>
-    <w:tbl>
-      <w:tblPr>
-        <w:tblW w:w="9638" w:type="dxa"/>
-        <w:jc w:val="center"/>
-        <w:tblBorders>
-          <w:top w:val="single" w:sz="4" w:space="0" w:color="999999"/>
-          <w:left w:val="single" w:sz="4" w:space="0" w:color="999999"/>
-          <w:bottom w:val="single" w:sz="4" w:space="0" w:color="999999"/>
-          <w:right w:val="single" w:sz="4" w:space="0" w:color="999999"/>
-          <w:insideH w:val="single" w:sz="4" w:space="0" w:color="999999"/>
-          <w:insideV w:val="single" w:sz="4" w:space="0" w:color="999999"/>
-        </w:tblBorders>
-        <w:tblLook w:val="04A0"/>
-      </w:tblPr>
-      <w:tblGrid>
-        <w:gridCol w:w="1300"/>
-        <w:gridCol w:w="1100"/>
-        <w:gridCol w:w="800"/>
-        <w:gridCol w:w="2500"/>
-        <w:gridCol w:w="800"/>
-        <w:gridCol w:w="1100"/>
-        <w:gridCol w:w="2038"/>
-      </w:tblGrid>
-      <w:tr>
-        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>房屋</w:t></w:r></w:p></w:tc>
-        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>位置</w:t></w:r></w:p></w:tc>
-        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>工种</w:t></w:r></w:p></w:tc>
-        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>问题描述</w:t></w:r></w:p></w:tc>
-        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>严重程度</w:t></w:r></w:p></w:tc>
-        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>日期</w:t></w:r></w:p></w:tc>
-        <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2c3e50"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>图片</w:t></w:r></w:p></w:tc>
-      </w:tr>${tableRows}
-    </w:tbl>
+    </w:p>${docBody}
     <w:sectPr>
       <w:pgSz w:w="11906" w:h="16838"/>
       <w:pgMar w:top="1134" w:right="850" w:bottom="1134" w:left="850"/>
